@@ -6,3 +6,4 @@ md2pdf-helper/.build
 typst-bin
 debug.typ
 .DS_Store
+.claude/
