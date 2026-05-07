@@ -84,9 +84,18 @@ fn run_conversion(input_path: &Path, output_path: &Path, config: &ConversionConf
         .parent()
         .ok_or_else(|| anyhow::anyhow!("Input file has no parent directory"))?;
 
-    let diagrams_dir = root_dir.join("assets/diagrams");
-    let _ = fs::remove_dir_all(&diagrams_dir);
-    fs::create_dir_all(&diagrams_dir)?;
+    // All intermediates (Typst source + diagram SVGs) live in system temp.
+    // Per-process unique dir → safe for concurrent runs and watch mode.
+    let tmp_dir = std::env::temp_dir().join(format!(
+        "md2pdf-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    fs::create_dir_all(&tmp_dir)?;
+    let diagrams_dir = tmp_dir.join("diagrams");
 
     let md_content = fs::read_to_string(input_path)
         .with_context(|| format!("Failed to read {}", input_path.display()))?;
@@ -96,26 +105,33 @@ fn run_conversion(input_path: &Path, output_path: &Path, config: &ConversionConf
     }
 
     println!("Converting to Typst (AST mode)...");
-    let typst_source = markdown::convert_to_typst(&md_content, &config.lang, &config.font, root_dir);
+    let typst_source = markdown::convert_to_typst(
+        &md_content,
+        &config.lang,
+        &config.font,
+        root_dir,
+        &diagrams_dir,
+    );
 
-    let tmp_dir = root_dir.join(".tmp_typst");
-    fs::create_dir_all(&tmp_dir)?;
     let typst_file = tmp_dir.join("main.typ");
     fs::write(&typst_file, typst_source)?;
     println!("Done.");
 
     println!("Rendering to PDF...");
 
+    // --root "/" lets typst access both the temp .typ file and user images
+    // at their absolute paths. Acceptable for a local CLI tool.
     let status = Command::new(&config.typst_bin)
         .arg("compile")
         .arg(&typst_file)
         .arg(output_path)
         .arg("--root")
-        .arg(root_dir)
-        .arg("--font-path")
-        .arg(root_dir.join("assets"))
+        .arg("/")
         .status()
         .with_context(|| format!("Failed to run typst binary '{}'", config.typst_bin))?;
+
+    // Always clean up temp regardless of success/failure.
+    let _ = fs::remove_dir_all(&tmp_dir);
 
     if status.success() {
         println!("Success! PDF saved to {}", output_path.display());

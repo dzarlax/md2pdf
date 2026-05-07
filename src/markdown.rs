@@ -135,12 +135,17 @@ fn count_headings<'a>(node: &'a AstNode<'a>) -> usize {
     node.children().fold(self_count, |acc, child| acc + count_headings(child))
 }
 
-pub fn convert_to_typst(md: &str, lang: &str, font: &str, root_dir: &Path) -> String {
+pub fn convert_to_typst(
+    md: &str,
+    lang: &str,
+    font: &str,
+    root_dir: &Path,
+    diagrams_dir: &Path,
+) -> String {
     let arena = Arena::new();
     let root = parse_document(&arena, md, &make_options());
 
-    let diagrams_dir = root_dir.join("assets/diagrams");
-    let _ = fs::create_dir_all(&diagrams_dir);
+    // diagrams_dir is created lazily on first SVG write.
 
     let mut typst = String::new();
 
@@ -173,29 +178,29 @@ pub fn convert_to_typst(md: &str, lang: &str, font: &str, root_dir: &Path) -> St
 
 "#);
 
-    walk_nodes(root, &mut typst, &diagrams_dir);
+    walk_nodes(root, &mut typst, root_dir, diagrams_dir);
 
     typst
 }
 
-fn walk_nodes<'a>(node: &'a AstNode<'a>, out: &mut String, diagrams_dir: &Path) {
+fn walk_nodes<'a>(node: &'a AstNode<'a>, out: &mut String, root_dir: &Path, diagrams_dir: &Path) {
     match &node.data.borrow().value {
         NodeValue::Document => {
             for child in node.children() {
-                walk_nodes(child, out, diagrams_dir);
+                walk_nodes(child, out, root_dir, diagrams_dir);
             }
         }
         NodeValue::Heading(h) => {
             let prefix = "=".repeat(h.level as usize);
             out.push_str(&format!("{} ", prefix));
             for child in node.children() {
-                walk_nodes(child, out, diagrams_dir);
+                walk_nodes(child, out, root_dir, diagrams_dir);
             }
             out.push_str("\n\n");
         }
         NodeValue::Paragraph => {
             for child in node.children() {
-                walk_nodes(child, out, diagrams_dir);
+                walk_nodes(child, out, root_dir, diagrams_dir);
             }
             out.push_str("\n\n");
         }
@@ -210,7 +215,7 @@ fn walk_nodes<'a>(node: &'a AstNode<'a>, out: &mut String, diagrams_dir: &Path) 
         }
         NodeValue::List(_) => {
             for child in node.children() {
-                walk_nodes(child, out, diagrams_dir);
+                walk_nodes(child, out, root_dir, diagrams_dir);
             }
             out.push_str("\n");
         }
@@ -221,25 +226,25 @@ fn walk_nodes<'a>(node: &'a AstNode<'a>, out: &mut String, diagrams_dir: &Path) 
                 // that Paragraph normally emits, which creates excessive spacing in lists.
                 if matches!(&child.data.borrow().value, NodeValue::Paragraph) {
                     for inline in child.children() {
-                        walk_nodes(inline, out, diagrams_dir);
+                        walk_nodes(inline, out, root_dir, diagrams_dir);
                     }
                     out.push('\n');
                 } else {
-                    walk_nodes(child, out, diagrams_dir);
+                    walk_nodes(child, out, root_dir, diagrams_dir);
                 }
             }
         }
         NodeValue::Strong => {
             out.push_str("#strong[");
             for child in node.children() {
-                walk_nodes(child, out, diagrams_dir);
+                walk_nodes(child, out, root_dir, diagrams_dir);
             }
             out.push_str("]");
         }
         NodeValue::Emph => {
             out.push_str("#emph[");
             for child in node.children() {
-                walk_nodes(child, out, diagrams_dir);
+                walk_nodes(child, out, root_dir, diagrams_dir);
             }
             out.push_str("]");
         }
@@ -250,7 +255,7 @@ fn walk_nodes<'a>(node: &'a AstNode<'a>, out: &mut String, diagrams_dir: &Path) 
                 vec!["1fr"; col_count].join(", ")
             ));
             for child in node.children() {
-                walk_nodes(child, out, diagrams_dir);
+                walk_nodes(child, out, root_dir, diagrams_dir);
             }
             out.push_str(")\n\n");
         }
@@ -259,7 +264,7 @@ fn walk_nodes<'a>(node: &'a AstNode<'a>, out: &mut String, diagrams_dir: &Path) 
                 out.push_str("  table.header(\n");
             }
             for child in node.children() {
-                walk_nodes(child, out, diagrams_dir);
+                walk_nodes(child, out, root_dir, diagrams_dir);
             }
             if *is_header {
                 out.push_str("  ),\n");
@@ -268,7 +273,7 @@ fn walk_nodes<'a>(node: &'a AstNode<'a>, out: &mut String, diagrams_dir: &Path) 
         NodeValue::TableCell => {
             out.push_str("    [");
             for child in node.children() {
-                walk_nodes(child, out, diagrams_dir);
+                walk_nodes(child, out, root_dir, diagrams_dir);
             }
             out.push_str("],\n");
         }
@@ -297,7 +302,7 @@ fn walk_nodes<'a>(node: &'a AstNode<'a>, out: &mut String, diagrams_dir: &Path) 
             let url = escape_typst(&link.url);
             out.push_str(&format!("#link(\"{url}\")["));
             for child in node.children() {
-                walk_nodes(child, out, diagrams_dir);
+                walk_nodes(child, out, root_dir, diagrams_dir);
             }
             out.push(']');
         }
@@ -310,12 +315,12 @@ fn walk_nodes<'a>(node: &'a AstNode<'a>, out: &mut String, diagrams_dir: &Path) 
                 }
                 s
             };
-            // Typst uses /path relative to --root (root_dir). Relative MD image
-            // paths are relative to root_dir, so just prepend "/".
+            // Resolve to an absolute filesystem path so it works regardless
+            // of where the .typ source lives.
             let resolved = if src.starts_with("http://") || src.starts_with("https://") {
                 src.clone()
             } else {
-                format!("/{src}")
+                root_dir.join(src).display().to_string()
             };
             if alt.is_empty() {
                 out.push_str(&format!("#align(center, image(\"{resolved}\", width: 80%))\n\n"));
@@ -341,12 +346,13 @@ fn walk_nodes<'a>(node: &'a AstNode<'a>, out: &mut String, diagrams_dir: &Path) 
                 };
 
                 if let Some(svg_content) = svg {
+                    let _ = fs::create_dir_all(diagrams_dir);
                     let filename = format!("{}.svg", Uuid::new_v4());
                     let filepath = diagrams_dir.join(&filename);
                     if fs::write(&filepath, svg_content).is_ok() {
                         out.push_str(&format!(
-                            "#align(center, box(image(\"/assets/diagrams/{}\", width: 60%, height: 8cm, fit: \"contain\")))\n\n",
-                            filename
+                            "#align(center, box(image(\"{}\", width: 60%, height: 8cm, fit: \"contain\")))\n\n",
+                            filepath.display()
                         ));
                     }
                 } else {
@@ -358,7 +364,7 @@ fn walk_nodes<'a>(node: &'a AstNode<'a>, out: &mut String, diagrams_dir: &Path) 
         }
         _ => {
             for child in node.children() {
-                walk_nodes(child, out, diagrams_dir);
+                walk_nodes(child, out, root_dir, diagrams_dir);
             }
         }
     }
