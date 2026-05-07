@@ -4,14 +4,16 @@ Converts Markdown to PDF via [Typst](https://typst.app). Handles wide tables, Me
 
 ## Features
 
-- Tables with styled header row
+- Tables with styled header row, auto-wrapping for long inline-code cells
 - Mermaid diagrams (rendered to SVG)
 - ASCII diagrams via svgbob
 - Fenced code blocks with language tag
 - Bold, italic, inline code, lists
+- Links, images (local + remote), horizontal rules
 - Configurable language and font
-- Finder Quick Action (right-click → Convert to PDF)
+- Finder Service: right-click any `.md` → **Services → Convert to PDF**
 - Watch mode for live re-rendering
+- Keeps your folder clean: only the `.pdf` is left after conversion
 
 ## Installation
 
