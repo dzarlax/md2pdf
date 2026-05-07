@@ -1,0 +1,13 @@
+[package]
+name = "md2pdf"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+comrak = "0.33"
+mermaid-rs-renderer = "0.2"
+svgbob = "0.7"
+clap = { version = "4.5", features = ["derive"] }
+anyhow = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+uuid = { version = "1.0", features = ["v4"] }
